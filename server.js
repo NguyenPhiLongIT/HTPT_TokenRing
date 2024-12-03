@@ -124,6 +124,8 @@ function handleConnection(socket) {
                 handleJoin(socket, message);
             } else if (message.startsWith('HEARTBEAT') && !waitingReconnect) {
                 resetHeartbeatTimeout(message);
+            } else if (message.startsWith('EXIT')) {
+                handleExit(socket, message);
             } else if (message.startsWith('RECONNECT')) {
                 // const newIpPort = message.split(' ')[1];
                 // let tokenStatus = message.split(' ')[2];
@@ -242,8 +244,68 @@ function joinRing(ipPort) {
     } catch (error) {
         console.error(error);
     }
-
 }
+
+function exitRing() {
+    try {
+        if (!nextMachineIpPort) {
+            console.error("Không có máy tiếp theo để thông báo thoát.");
+            return;
+        }
+
+        const exitMessage = `EXIT ${machineIp}:${machinePort} ${nextMachineIpPort}`;
+        const [nextIp, nextPort] = nextMachineIpPort.split(':');
+        const client = new net.Socket();
+
+        client.connect(parseInt(nextPort, 10), nextIp, () => {
+            console.log(`Thông báo thoát khỏi vòng được gửi: ${exitMessage}`);
+            client.write(exitMessage);
+            client.end();
+        });
+
+        client.on('error', (err) => {
+            console.error("Không thể gửi tin nhắn thoát, chi tiết: ", err);
+        });
+    } catch (error) {
+        console.error("Lỗi trong quá trình thoát vòng: ", error);
+    }
+}
+
+function handleExit(socket, message) {
+    try {
+        const parts = message.split(' ');
+        const currentIpPort = parts[1];
+        const newNextIpPort = parts[2];
+
+        console.log(`Nhận được yêu cầu thoát từ máy: ${currentIpPort}, cập nhật máy kế tiếp: ${newNextIpPort}`);
+
+        if (nextMachineIpPort === currentIpPort) {
+            nextMachineIpPort = newNextIpPort;
+            console.log(`Nút thoát: ${currentIpPort}. Cập nhật máy kế tiếp thành: ${nextMachineIpPort}`);
+            broadcastUpdate();
+
+            if (hasToken) {
+                sendTokenToNextMachine();
+            }
+        } else {
+            const [nextIp, nextPort] = nextMachineIpPort.split(':');
+            const client = new net.Socket();
+
+            client.connect(parseInt(nextPort, 10), nextIp, () => {
+                console.log(`Chuyển tiếp tin nhắn thoát: ${message}`);
+                client.write(message);
+                client.end();
+            });
+
+            client.on('error', (err) => {
+                console.error("Không thể chuyển tiếp tin nhắn thoát, chi tiết: ", err);
+            });
+        }
+    } catch (error) {
+        console.error("Lỗi khi xử lý yêu cầu thoát: ", error);
+    }
+}
+
 
 function startHeartbeat() {
     try {
@@ -332,7 +394,6 @@ function startServer(port) {
     } catch (error) {
         console.error(error);
     }
-
 }
 
 const args = process.argv.slice(2);
@@ -365,6 +426,11 @@ app.post('/join-ring', (req, res) => {
     const { ipPort } = req.body;
     joinRing(ipPort);
     res.send('Join ring request processed.');
+});
+
+app.post('/exit-ring', (req, res) => {
+    exitRing();
+    res.send('Exit ring request processed.');
 });
 
 const server = app.listen(initialPort, () => {
